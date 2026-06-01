@@ -5,6 +5,7 @@
 ![OPA](https://img.shields.io/badge/Open%20Policy%20Agent-Policy%20as%20Code-green)
 ![DevSecOps](https://img.shields.io/badge/DevSecOps-Security-red)
 ![Platform Engineering](https://img.shields.io/badge/Platform-Engineering-purple)
+![EduArn LMS](https://eduarn.com)
 
 ## Enterprise Terraform Governance using Open Policy Agent (OPA)
 
