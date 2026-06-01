@@ -1,0 +1,560 @@
+# Terraform + Open Policy Agent (OPA) Governance for AWS S3 Buckets
+
+## Overview
+
+Infrastructure as Code (IaC) enables organizations to provision cloud resources consistently and efficiently. However, without governance controls, teams may create resources that violate organizational standards, security requirements, or naming conventions.
+
+This document demonstrates how to integrate Terraform and Open Policy Agent (OPA) to enforce AWS S3 bucket naming standards before infrastructure deployment.
+
+---
+
+# Learning Objectives
+
+After completing this guide, you will be able to:
+
+* Understand Terraform plan validation using OPA
+* Create AWS S3 buckets with Terraform
+* Generate Terraform execution plans
+* Convert Terraform plans into JSON format
+* Write OPA/Rego policies
+* Enforce naming standards before deployment
+* Integrate policy validation into CI/CD pipelines
+
+---
+
+# Architecture
+
+
+Developer
+    |
+    v
+Terraform Code
+    |
+    v
+terraform plan
+    |
+    v
+tfplan.json
+    |
+    v
+OPA Policy Evaluation
+    |
+    +---- PASS ---> terraform apply
+    |
+    +---- FAIL ---> Block Deployment
+
+
+---
+
+# Prerequisites
+
+## Software Requirements
+
+| Tool        | Version |
+| ----------- | ------- |
+| Terraform   | >= 1.5  |
+| OPA         | Latest  |
+| AWS CLI     | Latest  |
+| AWS Account | Active  |
+
+Verify installation:
+
+
+terraform version
+opa version
+aws --version
+
+
+---
+
+# Project Structure
+
+
+terraform-opa/
+├── main.tf
+├── terraform.tfvars
+├── validate.sh
+└── policy/
+    └── s3_bucket.rego
+
+
+---
+
+# Step 1: Terraform Configuration
+
+File: main.tf
+
+hcl
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+  shared_credentials_files = ["./keys"]
+  profile                  = "default"
+}
+
+variable "bucket_name" {
+  type = string
+}
+
+resource "aws_s3_bucket" "bucket" {
+  bucket = var.bucket_name
+
+  tags = {
+    Environment = "dev"
+    ManagedBy   = "Terraform"
+  }
+}
+
+
+Purpose:
+
+* Creates an S3 bucket
+* Uses a variable for bucket naming
+* Enables policy validation before deployment
+
+---
+
+# Step 2: Define Input Variables
+
+File: terraform.tfvars
+
+Valid Example:
+
+hcl
+bucket_name = "company-dev-data-bucket"
+
+
+Invalid Example:
+
+hcl
+bucket_name = "TEST_BUCKET"
+
+
+---
+
+# Step 3: Initialize Terraform
+
+Initialize providers:
+
+
+terraform init
+
+
+Expected Output:
+
+
+Terraform has been successfully initialized.
+
+
+---
+
+# Step 4: Generate Execution Plan
+
+Create a Terraform plan:
+
+
+terraform plan -out=tfplan
+
+
+Terraform stores all proposed infrastructure changes in:
+
+
+tfplan
+
+
+---
+
+# Step 5: Convert Plan to JSON
+
+OPA cannot directly evaluate binary plan files.
+
+Convert plan:
+
+
+terraform show -json tfplan > tfplan.json
+
+
+Result:
+
+
+tfplan.json
+
+
+This JSON document becomes the policy input.
+
+---
+
+# Understanding Terraform Plan JSON
+
+Example:
+
+json
+{
+  "resource_changes": [
+    {
+      "type": "aws_s3_bucket",
+      "change": {
+        "after": {
+          "bucket": "TEST_BUCKET"
+        }
+      }
+    }
+  ]
+}
+
+
+OPA inspects this structure.
+
+---
+
+# Step 6: Create OPA Policy
+
+File: policy/s3_bucket.rego
+
+package terraform.s3
+
+deny contains msg if {
+
+  resource := input.resource_changes[_]
+
+  resource.type == "aws_s3_bucket"
+
+  bucket := resource.change.after.bucket
+
+  not regex.match(
+    "^company-(dev|test|stage|prod)-[a-z0-9-]{3,40}$",
+    bucket
+  )
+
+  msg := sprintf(
+    "Bucket '%s' violates enterprise naming standards",
+    [bucket]
+  )
+}
+
+
+---
+
+# Policy Breakdown
+
+## Rule 1
+
+resource.type == "aws_s3_bucket"
+
+
+Targets only S3 bucket resources.
+
+---
+
+## Rule 2
+
+bucket := resource.change.after.bucket
+
+
+Reads proposed bucket name.
+
+---
+
+## Rule 3
+
+regex.match(...)
+
+
+Validates naming convention.
+
+Required format:
+
+
+company-<environment>-<application>
+
+
+Examples:
+
+Valid:
+
+
+company-dev-data
+company-test-logs
+company-stage-backup
+company-prod-analytics
+
+
+Invalid:
+
+
+TEST_BUCKET
+MyBucket
+prod-data
+company_dev_logs
+
+
+---
+
+# Step 7: Evaluate Policy
+
+Run:
+
+
+opa eval \
+--input tfplan.json \
+--data policy/s3_bucket.rego \
+"data.terraform.s3.deny"
+
+
+---
+
+# Successful Validation
+
+Output:
+
+json
+{
+  "result": [
+    {
+      "expressions": [
+        {
+          "value": []
+        }
+      ]
+    }
+  ]
+}
+
+
+Meaning:
+
+No violations detected.
+
+---
+
+# Failed Validation
+
+Output:
+
+json
+{
+  "result": [
+    {
+      "expressions": [
+        {
+          "value": [
+            "Bucket 'TEST_BUCKET' violates enterprise naming standards"
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+
+Meaning:
+
+Deployment must be blocked.
+
+---
+
+# Automation Script
+
+File: validate.sh
+
+
+#!/bin/
+
+set -e
+
+terraform init
+
+terraform plan -out=tfplan
+
+terraform show -json tfplan > tfplan.json
+
+opa eval \
+  --fail-defined \
+  --input tfplan.json \
+  --data policy/s3_bucket.rego \
+  "data.terraform.s3.deny"
+
+echo "Validation Passed"
+
+
+Make executable:
+
+
+chmod +x validate.sh
+
+
+Run:
+
+
+./validate.sh
+
+
+---
+
+# CI/CD Integration
+
+## Jenkins Example
+
+groovy
+stage('Terraform Validation') {
+    steps {
+        sh './validate.sh'
+    }
+}
+
+
+---
+
+## GitHub Actions Example
+
+yaml
+name: Terraform Policy Validation
+
+on:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform JSON
+        run: terraform show -json tfplan > tfplan.json
+
+      - name: OPA Validation
+        run: |
+          opa eval \
+          --fail-defined \
+          --input tfplan.json \
+          --data policy/s3_bucket.rego \
+          "data.terraform.s3.deny"
+
+
+---
+
+# Enterprise Best Practices
+
+## Naming Standards
+
+Recommended format:
+
+
+company-environment-application
+
+
+Examples:
+
+
+company-dev-app1
+company-test-app1
+company-stage-app1
+company-prod-app1
+
+
+---
+
+## Policy Repository
+
+Store all policies centrally:
+
+
+policy-repository/
+├── aws
+├── azure
+├── gcp
+├── networking
+├── storage
+└── security
+
+
+---
+
+## Policy Categories
+
+### Security
+
+
+Encryption Required
+
+
+### Cost Control
+
+
+Mandatory Tags
+
+
+### Compliance
+
+
+Naming Standards
+
+
+### Governance
+
+
+Approved Regions
+
+
+---
+
+# Common Enhancements
+
+Additional OPA rules can validate:
+
+* S3 encryption enabled
+* Versioning enabled
+* Public access blocked
+* Required tags present
+* Approved AWS regions
+* Approved instance types
+* IAM least privilege
+
+Example:
+
+rego
+deny contains msg if {
+
+  resource := input.resource_changes[_]
+
+  resource.type == "aws_s3_bucket"
+
+  not resource.change.after.versioning.enabled
+
+  msg := "S3 versioning must be enabled"
+}
+
+
+---
+
+# Summary
+
+Using Terraform and OPA together enables proactive governance by validating infrastructure before deployment.
+
+Benefits include:
+
+* Consistent naming standards
+* Improved security posture
+* Reduced compliance violations
+* Automated governance
+* CI/CD integration
+* Shift-left policy enforcement
+
+OPA acts as a policy gate that evaluates Terraform plans and blocks infrastructure changes that violate organizational standards before they reach AWS.
