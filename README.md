@@ -118,6 +118,37 @@ OPA Policy Validation
 * Compliance Automation
 
 ---
+#How to Install OPA on Ubuntu 22.04 (Step-by-Step)
+
+OPA (Open Policy Agent) is a lightweight policy engine used for authorization, Kubernetes policies, CI/CD governance, and cloud security rules.
+
+Step 1: Update System Packages
+sudo apt update && sudo apt upgrade -y
+Step 2: Download OPA Binary
+
+Go to the official release page and download the latest Linux binary:
+
+curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+Step 3: Give Execute Permission
+chmod +x opa
+Step 4: Move OPA to System Path
+sudo mv opa /usr/local/bin/
+Step 5: Verify Installation
+opa version
+
+Expected output:
+
+Version: 1.x.x
+Build Commit: xxxx
+Step 6: Run OPA (Test Mode)
+opa run
+
+You can now use the interactive REPL mode.
+
+Exit:
+
+exit
+
 
 # Project Structure
 
